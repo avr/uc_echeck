@@ -1,0 +1,90 @@
+<?php
+//$Id: uc_echecknet.install,v 1.1 2009/05/21 05:40:43 rszrama Exp $
+
+/**
+ * @file
+ * Installs the table used to store account data until payments are processed.
+ */
+
+
+/**
+ * Implementation of hook_schema().
+ */
+function uc_echeck_schema() {
+  $schema = array();
+
+  $schema['uc_payment_echeck'] = array(
+    'fields' => array(
+      'echeck_id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'order_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'echeck_bank_name' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'echeck_bank_aba_code' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'echeck_bank_acct_num' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'echeck_bank_acct_num_last4' => array(
+        'type' => 'varchar',
+        'length' => 4,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'echeck_bank_acct_name' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'echeck_bank_acct_type' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+    ),
+    'indexes' => array(
+      'order_id' => array('order_id'),
+    ),
+    'primary key' => array('echeck_id'),
+  );
+
+  return $schema;
+}
+
+/**
+ * Implementation of hook_install().
+ */
+function uc_echeck_install() {
+  drupal_install_schema('uc_echeck');
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function uc_echeck_uninstall() {
+  drupal_uninstall_schema('uc_echeck');
+
+  db_query("DELETE FROM {variable} WHERE name LIKE 'uc_echeck_%%'");
+}
+

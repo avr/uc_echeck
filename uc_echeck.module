@@ -97,21 +97,21 @@ function uc_echeck_order($op, &$arg1, $arg2) {
         );
         
         // Process the eCheck payment.
-        
-          $pass = uc_payment_process('echeck', $arg1->order_id, $arg1->order_total, $data, TRUE, NULL, FALSE);
 
-          // If the payment failed, store the data back in the session and
-          // halt the checkout process.
-          if (!$pass) {
-            $message = variable_get('uc_credit_fail_message', t('We were unable to process your credit card payment. Please verify your card details and try again.  If the problem persists, contact us to complete your order.'));
-            return array(array('pass' => FALSE, 'message' => $message));
-          }
+        $pass = uc_payment_process('echeck', $arg1->order_id, $arg1->order_total, $data, TRUE, NULL, FALSE);
+
+        // If the payment failed, store the data back in the session and
+        // halt the checkout process.
+        if (!$pass) {
+          $message = variable_get('uc_credit_fail_message', t('We were unable to process your credit card payment. Please verify your card details and try again.  If the problem persists, contact us to complete your order.'));
+          return array(array('pass' => FALSE, 'message' => $message));
+        }
         else {
           // Otherwise empty out the routing and account numbers.
           uc_echeck_wipe_numbers($arg1->order_id);
         }
         break;
-      
+
       // Save the eCheck data for the order.
       case 'save':
         uc_echeck_save_echeck($arg1);

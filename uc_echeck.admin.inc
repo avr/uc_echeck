@@ -1,98 +1,5 @@
 <?php
 
-/**
- * 
- *
- */
-
-function uc_payment_method_echeck($op, &$arg1, $silent = FALSE) {
-  switch ($op) {
-    case 'cart-details':
-      return uc_strip_form(drupal_get_form('uc_echeck_payment_form', $arg1));
-
-    case 'cart-process':
-      // Fetch the eCheck details from the $_POST directly.
-      $data = array(
-        'echeck_bank_name' => $_POST['echeck_bank_name'],
-        'echeck_bank_aba_code' => str_replace(' ', '',  $_POST['echeck_bank_aba_code']),
-        'echeck_bank_acct_num' => str_replace(' ', '', $_POST['echeck_bank_acct_num']),
-        'echeck_bank_acct_name' => $_POST['echeck_bank_acct_name'],
-        'echeck_bank_acct_type' => $_POST['echeck_bank_acct_type'],
-      );
-
-      // Go ahead and put the eCheck data in the payment details array.
-      $arg1->payment_details = $data;
-
-      // Default our value for validation.
-      $return = TRUE;
-
-      // Make sure a bank name was entered.
-      if (empty($data['echeck_bank_name'])) {
-        if (!$silent) {
-          drupal_set_message(t('You must enter the name of your bank.'), 'error');
-        }
-        $return = FALSE;
-      }
-
-      // Validate the bank routing number.
-      if (empty($data['echeck_bank_aba_code']) || !ctype_digit($data['echeck_bank_aba_code'])) {
-        if (!$silent) {
-          drupal_set_message(t('You must enter a valid bank routing number.'), 'error');
-        }
-        $return = FALSE;
-      }
-
-      // Validate the bank account number.
-      if (empty($data['echeck_bank_acct_num']) || !ctype_digit($data['echeck_bank_acct_num'])) {
-        if (!$silent) {
-          drupal_set_message(t('You must enter a valid bank account number.'), 'error');
-        }
-        $return = FALSE;
-      }
-
-      // Make sure an account name was entered.
-      if (empty($data['echeck_bank_acct_name'])) {
-        if (!$silent) {
-          drupal_set_message(t('You must enter the name associated with your bank account.'), 'error');
-        }
-        $return = FALSE;
-      }
-
-      return $return;
-
-    case 'cart-review':
-      $review = array();
-
-      $review[] = array('title' => t('Bank'), 'data' => check_plain($arg1->payment_details['echeck_bank_name']));
-      $review[] = array('title' => t('Routing number'), 'data' => check_plain($arg1->payment_details['echeck_bank_aba_code']));
-      $review[] = array('title' => t('Account number'), 'data' => check_plain(variable_get('uc_echecknet_acct_num_mask', 'xxxxxx') . $arg1->payment_details['echeck_bank_acct_num_last4']));
-      $review[] = array('title' => t('Account name'), 'data' => check_plain($arg1->payment_details['echeck_bank_acct_name']));
-      $review[] = array('title' => t('Account type'), 'data' => uc_echeck_acct_type($arg1->payment_details['echeck_bank_acct_type']));
-
-      return $review;
-
-    case 'order-view':
-    case 'customer-view':
-      $lines = array(
-        t('Bank name') .': '. check_plain($arg1->payment_details['echeck_bank_name']),
-        t('Account #') .': '. check_plain(variable_get('uc_echeck_acct_num_mask', 'xxxxxx') . $arg1->payment_details['echeck_bank_acct_num_last4']),
-      );
-
-      return implode('<br />', $lines);
-
-    case 'order-details':
-      if (user_access('process echeck payments')) {
-        return t('Process eCheck payments using the<br />terminal available through the view tab.');
-      }
-      else {
-        return t('Processing eCheck payments requires<br />appropriate admin permission.');
-      }
-
-    case 'settings':
-      return uc_echeck_settings_form();
-  }
-}
-
 // Form to gather the required fields to process an eCheck payment.
 function uc_echeck_payment_form($form_state, $order) {
   $form = array();
@@ -186,6 +93,27 @@ function uc_echeck_settings_form() {
     ),
     '#default_value' => variable_get('uc_echeck_wipe_interval', 900),
   );
+  // Form elements that deal with credit card messages to customers.
+  $form['echeck_messages'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Customer messages'),
+    '#description' => t('Here you can alter messages displayed to customers using credit cards.'),
+    '#collapsible' => FALSE,
+  );
+  $form['echeck_messages']['uc_echeck_policy'] = array(
+    '#type' => 'textarea',
+    '#title' => t('eCheck payment policy'),
+    '#description' => t('Instructions for customers on the checkout page above the eCheck fields.'),
+    '#default_value' => variable_get('uc_echeck_policy', t('By selecting eCheck, you hereby authorize a direct withdrawal from the bank account indicated below.')),
+    '#rows' => 3,
+  );
+  $form['cc_messages']['uc_echeck_fail_message'] = array(
+    '#type' => 'textarea',
+    '#title' => t('eCheck processing failure message'),
+    '#description' => t('Error message displayed to customers when an attempted payment fails at checkout.'),
+    '#default_value' => variable_get('uc_echeck_fail_message', t('We were unable to process your eCheck payment. Please verify your bank details details and try again.  If the problem persists, contact us to complete your order.')),
+  );
+  
 
   return $form;
 }

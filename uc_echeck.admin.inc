@@ -107,7 +107,7 @@ function uc_echeck_settings_form() {
     '#default_value' => variable_get('uc_echeck_policy', t('By selecting eCheck, you hereby authorize a direct withdrawal from the bank account indicated below.')),
     '#rows' => 3,
   );
-  $form['cc_messages']['uc_echeck_fail_message'] = array(
+  $form['echeck_messages']['uc_echeck_fail_message'] = array(
     '#type' => 'textarea',
     '#title' => t('eCheck processing failure message'),
     '#description' => t('Error message displayed to customers when an attempted payment fails at checkout.'),

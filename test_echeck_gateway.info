@@ -1,0 +1,7 @@
+name = Test eCheck gateway
+description = Adds an eCheck gateway that simulates a successful payment for testing checkout.
+dependencies[] = uc_payment
+dependencies[] = uc_echeck
+package = Ubercart - payment
+core = 6.x
+php = 5.0

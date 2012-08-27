@@ -7,147 +7,229 @@
  */
 
 require_once 'uc_echeck.recurring.inc';
-require_once 'uc_echeck.admin.inc';
+
+/** Just authorize an amount on a bank account. */
+define('UC_ECHECK_AUTH_ONLY', 'authorize');
+
+/** Capture funds from a prior authorization. */
+define('UC_ECHECK_PRIOR_AUTH_CAPTURE', 'prior_auth_capture');
+
+/** Authorize and capture money all at once. */
+define('UC_ECHECK_AUTH_CAPTURE', 'auth_capture');
+
+/** Credit funds to a bank account. */
+define('UC_ECHECK_CREDIT', 'credit');
+
+/** Void a transaction before the transaction clears. */
+define('UC_ECHECK_VOID', 'void');
+
+/** Name of encryption key file. */
+define('UC_ECHECK_KEYFILE_NAME', 'uc_echeck.key');
+
+
+/*******************************************************************************
+ * Hook Functions (Drupal)
+ ******************************************************************************/
 
 /**
- * Implementation of hook_payment_method().
+ * Implements hook_menu().
  */
-function uc_echeck_payment_method() {
-  $methods = array();
-
-  // Do not show the eCheck payment method if encryption is not configured.
-  if (arg(1) == 'checkout' && uc_echeck_encryption_key() === FALSE) {
-    return;
-  }
-
-  $methods[] = array(
-    'id' => 'echeck',
-    'name' => t('eCheck'),
-    'title' => t('eCheck'),
-    'desc' => t('Pay by eCheck using your bank account information.'),
-    'callback' => 'uc_payment_method_echeck',
-    'weight' => 1,
-    'checkout' => TRUE,
+function uc_echeck_menu() {
+  $items['cart/checkout/echeck/bank_info'] = array(
+    'title' => 'Account Information',
+    'page callback' => 'uc_echeck_info',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+    'file' => 'uc_echeck.pages.inc',
+  );
+  $items['admin/store/orders/%uc_order/echeck'] = array(
+    'title callback' => 'uc_echeck_terminal_title',
+    'title arguments' => array(3),
+    'description' => 'Displays a form to process a echeck payment.',
+    'page callback' => 'uc_echeck_terminal',
+    'page arguments' => array(3),
+    'access arguments' => array('process echecks'),
+    'type' => MENU_CALLBACK,
+    'file' => 'uc_echeck.admin.inc',
   );
 
-  return $methods;
+  return $items;
 }
-
-
-function uc_payment_method_echeck($op, &$arg1, $silent = FALSE) {
-  switch ($op) {
-    case 'cart-details':
-      return uc_strip_form(drupal_get_form('uc_echeck_payment_form', $arg1));
-
-    case 'cart-process':
-      // Fetch the eCheck details from the $_POST directly.
-      $data = array(
-        'echeck_bank_name' => $_POST['echeck_bank_name'],
-        'echeck_bank_aba_code' => str_replace(' ', '',  $_POST['echeck_bank_aba_code']),
-        'echeck_bank_acct_num' => str_replace(' ', '', $_POST['echeck_bank_acct_num']),
-        'echeck_bank_acct_name' => $_POST['echeck_bank_acct_name'],
-        'echeck_bank_acct_type' => $_POST['echeck_bank_acct_type'],
-      );
-
-      // Go ahead and put the eCheck data in the payment details array.
-      $arg1->payment_details = $data;
-
-      // Default our value for validation.
-      $return = TRUE;
-
-      // Make sure a bank name was entered.
-      if (empty($data['echeck_bank_name'])) {
-        if (!$silent) {
-          drupal_set_message(t('You must enter the name of your bank.'), 'error');
-        }
-        $return = FALSE;
-      }
-
-      // Validate the bank routing number.
-      if (empty($data['echeck_bank_aba_code']) || !_validate_echeck_aba($data['echeck_bank_aba_code'])) {
-        if (!$silent) {
-          drupal_set_message(t('You must enter a valid bank routing number.'), 'error');
-        }
-        $return = FALSE;
-      }
-
-      // Validate the bank account number.
-      if (empty($data['echeck_bank_acct_num']) || !ctype_digit($data['echeck_bank_acct_num'])) {
-        if (!$silent) {
-          drupal_set_message(t('You must enter a valid bank account number.'), 'error');
-        }
-        $return = FALSE;
-      }
-
-      // Make sure an account name was entered.
-      if (empty($data['echeck_bank_acct_name'])) {
-        if (!$silent) {
-          drupal_set_message(t('You must enter the name associated with your bank account.'), 'error');
-        }
-        $return = FALSE;
-      }
-
-      return $return;
-
-    case 'cart-review':
-      $review = array();
-
-      $review[] = array('title' => t('Bank'), 'data' => check_plain($arg1->payment_details['echeck_bank_name']));
-      $review[] = array('title' => t('Routing number'), 'data' => check_plain($arg1->payment_details['echeck_bank_aba_code']));
-      $review[] = array('title' => t('Account number'), 'data' => check_plain(variable_get('uc_echeck_acct_num_mask', 'xxxxxx') . $arg1->payment_details['echeck_bank_acct_num_last4']));
-      $review[] = array('title' => t('Account name'), 'data' => check_plain($arg1->payment_details['echeck_bank_acct_name']));
-      $review[] = array('title' => t('Account type'), 'data' => uc_echeck_acct_type($arg1->payment_details['echeck_bank_acct_type']));
-
-      return $review;
-
-    case 'order-view':
-    case 'customer-view':
-      $lines = array(
-        t('Bank name') .': '. check_plain($arg1->payment_details['echeck_bank_name']),
-        t('Account #') .': '. check_plain(variable_get('uc_echeck_acct_num_mask', 'xxxxxx') . $arg1->payment_details['echeck_bank_acct_num_last4']),
-      );
-
-      return implode('<br />', $lines);
-
-    case 'order-details':
-      if (user_access('process echeck payments')) {
-        return t('Process eCheck payments using the<br />terminal available through the view tab.');
-      }
-      else {
-        return t('Processing eCheck payments requires<br />appropriate admin permission.');
-      }
-
-    case 'settings':
-      return uc_echeck_settings_form();
-  }
-}
-
 
 /**
- * Implementation of hook_form_alter().
+ * Implements hook_perm().
  */
+function uc_echeck_perm() {
+  return array('administer echecks', 'view echeck details', 'view echeck numbers', 'process echecks');
+}
 
-function uc_echeck_form_alter(&$form, &$form_state, $form_id) {
+/**
+ * Implements hook_form_alter().
+ */
+function uc_echeck_form_alter(&$form, $form_state, $form_id) {
   switch ($form_id) {
     case 'uc_payment_methods_form':
-      if (empty($_POST) && uc_echeck_encryption_key() === FALSE) {
-        drupal_set_message(t('The eCheck encryption key filepath must be configured to accept eCheck payments.'), 'error');
+      if (user_access('administer echecks')) {
+        if (empty($_POST) && !uc_echeck_encryption_key()) {
+          // Report error and expand fieldset so the problem is easy to spot
+          form_set_error('uc_echeck_encryption_path', t('eCheck encryption must be configured to accept eCheck payments.'));
+          $form['method_echeck']['#collapsed'] = FALSE;
+        }
+        $form['#validate'][] = 'uc_echeck_settings_form_validate';
+        $form['#submit'][]   = 'uc_echeck_settings_form_submit';
       }
-      $form['#validate'][] = 'uc_echeck_settings_form_validate';
-      $form['#submit'][] = 'uc_echeck_settings_form_submit';
       break;
+
+    case 'uc_cart_checkout_form':
+      if (isset($_POST['echeck_bank_acct_num'])) {
+        $order = new stdClass();
+        uc_payment_method_echeck('cart-process', $order, TRUE);
+      }
+
+      // Cache the eCheck details for use in other functions.
+      if (isset($_SESSION['seschk'])) {
+        uc_echeck_cache('save', $_SESSION['seschk']);
+
+        // Store the encrypted details to the form for processing on submit.
+        $form['payment_details_data'] = array(
+          '#type' => 'hidden',
+          '#value' => $_SESSION['seschk'],
+        );
+        // Clear the session of the details.
+        unset($_SESSION['seschk']);
+      }
+      unset($_SESSION['echeck_pay']);
+      break;
+
+    case 'uc_cart_checkout_review_form':
+      // Check if the customer paid by eCheck and refreshed on the review page.
+      if (isset($_SESSION['echeck_pay']) && !isset($_SESSION['seschk']) && empty($_POST['seschk'])) {
+        // Send them back to the checkout form to put in their details again.
+        drupal_set_message(t('To protect our customers from identity theft, eCheck account details are erased when a browser refreshes on the checkout review page.  Please enter your account details again and re-submit the form.'), 'error');
+
+        $_SESSION['clear_echeck'] = TRUE;
+        unset($_SESSION['echeck_pay']);
+        drupal_goto('cart/checkout');
+      }
+
+      if (isset($_SESSION['seschk'])) {
+        // Cache the eCheck details for use in other functions.
+        uc_echeck_cache('save', $_SESSION['seschk']);
+
+        // Store the encrypted details to the form for processing on submit.
+        $form['seschk'] = array(
+          '#type' => 'hidden',
+          '#value' => base64_encode($_SESSION['seschk']),
+        );
+
+        // Clear the session of the details.
+        unset($_SESSION['seschk']);
+      }
+      else {
+        $form['seschk'] = array(
+          '#type' => 'hidden',
+          '#value' => '',
+        );
+      }
+
+      // Add submit handler to preserve eCheck details for the back button and
+      // failed order submissions.
+      $form['back']['#submit'][] = 'uc_echeck_cart_review_back_submit';
+
+      // Reconstruct the submit handler array for before and after processing.
+      $submit = array_merge(array('uc_echeck_cart_review_pre_form_submit'), $form['#submit']);
+      $submit[] = 'uc_echeck_cart_review_post_form_submit';
+
+      $form['#submit'] = $submit;
+
+      break;
+
+    case 'uc_payment_gateways_form':
+      // Loop through each of the gateways on the form.
+      foreach (element_children($form['gateways']) as $key) {
+        // Get the transaction types associated with this gateway.
+        $gateway_types = uc_echeck_gateway_txn_types($key);
+
+        // Loop through all the available transaction types.
+        $options = array();
+
+        $txn_types = array(
+          UC_ECHECK_AUTH_ONLY => t('Authorization only'),
+          UC_ECHECK_AUTH_CAPTURE => t('Authorize and capture immediately'),
+          UC_ECHECK_REFERENCE_SET => t('Set a reference only'),
+        );
+
+        foreach ($txn_types as $type => $title) {
+          // Add the current one to the options if the gateway supports it.
+          if (in_array($type, $gateway_types)) {
+            $options[$type] = $title;
+          }
+        }
+
+        $form['gateways'][$key]['uc_pg_'. $key .'_cc_txn_type'] = array(
+          '#type' => 'radios',
+          '#title' => t('Default eCheck transaction type'),
+          '#description' => t('Only available transaction types are listed. The default will be used unless an administrator chooses otherwise through the terminal.'),
+          '#options' => $options,
+          '#default_value' => variable_get('uc_pg_'. $key .'_cc_txn_type', UC_ECHECK_AUTH_CAPTURE),
+          '#weight' => -5,
+        );
+      }
   }
 }
 
-
 /**
- * Implementation of hook_cron().
+ * Implements hook_cron().
  */
 function uc_echeck_cron() {
-  // Delete any eCheck data that's been stagnant for 15 minutes or more.
-  db_query("DELETE FROM {uc_payment_echeck} WHERE order_id IN(SELECT order_id FROM {uc_orders} WHERE order_status IN". uc_order_status_list('specific', TRUE) ." AND modified <= %d)", time() - variable_get('uc_echeck_wipe_interval', 900));
+  // Truncate stored data when in debug per the eCheck method settings.
+  if (variable_get('uc_echeck_debug', FALSE)) {
+    $time = strtotime(variable_get('uc_echeck_number_duration', '3') .' '. variable_get('uc_echeck_number_unit', 'days') .' ago');
+    $key = uc_echeck_encryption_key();
+    $crypt = new uc_encryption_class();
+
+    $result = db_query("SELECT order_id FROM {uc_orders} WHERE modified <= %d AND order_status = '%s'", $time, variable_get('uc_echeck_clear_status', uc_order_state_default('completed')));
+    while ($order = db_fetch_array($result)) {
+      // Load up the existing data array.
+      $data = db_result(db_query("SELECT data FROM {uc_orders} WHERE order_id = %d", $order['order_id']));
+      $data = unserialize($data);
+
+      $cache = uc_echeck_cache('save', $data['echeck_data']);
+
+      // Save only some limited, PCI compliant data.
+      $data['echeck_data']['echeck_bank_acct_num'] = substr($data['echeck_data']['echeck_bank_acct_num'], -4);
+
+      $data['echeck_data'] = $crypt->encrypt(uc_echeck_encryption_key(), base64_encode(serialize($data)));
+      uc_store_encryption_errors($crypt, 'uc_echeck');
+
+      // Save it again.
+      db_query("UPDATE {uc_orders} SET data = '%s' WHERE order_id = %d", serialize($data), $order['order_id']);
+    }
+  }
 }
 
+/**
+ * Implements hook_exit().
+ */
+function uc_echeck_exit() {
+  // Make sure sensitive checkout session data doesn't persist on other pages.
+  if (isset($_SESSION['seschk'])) {
+    if (isset($_GET['q'])) {
+      // Separate the args ourself since the arg() function may not be loaded.
+      $args = explode('/', $_GET['q']);
+      if (!isset($args[1]) || $args[1] != 'checkout') {
+        unset($_SESSION['seschk']);
+      }
+    }
+    else {
+      unset($_SESSION['seschk']);
+    }
+  }
+}
+
+/*******************************************************************************
+ * Hook Functions (Ubercart)
+ ******************************************************************************/
 
 /**
  * Implementation of hook_store_status().
@@ -169,6 +251,14 @@ function uc_echeck_store_status() {
     );
   }
 
+  if (variable_get('uc_echeck_debug', FALSE)) {
+    $statuses[] = array(
+      'status' => 'warning',
+      'title' => t('eCheck debug mode'),
+      'desc' => t('Because you are using debug mode, eCheck details may be stored in violation of PCI security standards. Debug mode is only recommended for testing transactions with fake eCheck details.'),
+    );
+  }
+
   return $statuses;
 }
 
@@ -176,307 +266,407 @@ function uc_echeck_store_status() {
  * Implementation of hook_order().
  */
 function uc_echeck_order($op, &$arg1, $arg2) {
-  // If the order payment method is eCheck
-  if ($arg1->payment_method == 'echeck') {
-    switch ($op) {
-      // Attempt payment upon order submission during checkout.
-      case 'submit':
+  dpm($op, "hook_order");
+  // Set up the encryption key and object for saving and loading.
+  if ($arg1->payment_method == 'echeck' && ($op == 'save' || $op == 'load')) {
+    // Log an error if encryption isn't configured properly.
+    if (!uc_echeck_encryption_key()) {
+      watchdog('uc_echeck', 'eCheck encryption must be set up to process eCheck accounts.');
+    }
+  }
+
+  switch ($op) {
+    case 'submit':
+      if ($arg1->payment_method == 'echeck') {
+        // Clear out that session variable denoting this as a CC paid order.
+        unset($_SESSION['echeck_pay']);
+
         $gateway_id = uc_echeck_default_gateway();
         $data = array(
           'txn_type' => variable_get('uc_pg_'. $gateway_id .'_echeck_txn_type', UC_ECHECK_AUTH_CAPTURE),
         );
         
-        // Process the eCheck payment.
+        // Attempt to process the eCheck payment.
         $pass = uc_payment_process('echeck', $arg1->order_id, $arg1->order_total, $data, TRUE, NULL, FALSE);
-
         // If the payment failed, store the data back in the session and
         // halt the checkout process.
         if (!$pass) {
           $message = variable_get('uc_echeck_fail_message', t('We were unable to process your eCheck payment. Please verify your bank account details and try again.  If the problem persists, contact us to complete your order.'));
           return array(array('pass' => FALSE, 'message' => $message));
         }
-        else {
-          // Otherwise empty out the routing and account numbers.
-          uc_echeck_wipe_numbers($arg1->order_id);
+
+        if (variable_get('uc_echeck_debug', FALSE)) {
+          // If we're in debug mode, store the eCheck data in the order so it can be viewed
+          // later for test processing.
+          $echeck_data = $arg1->payment_details;
+
+          _save_echeck_data_to_order($echeck_data, $arg1->order_id);
         }
-        break;
-
-      // Save the eCheck data for the order.
-      case 'save':
-        uc_echeck_save_echeck($arg1);
-        break;
-
-      // Load the eCheck data for the order.
-      case 'load':
-        $arg1->payment_details = uc_echeck_load_echeck($arg1);
-        break;
-    }
-  }
-}
-
-
-
-/**
- * Loads the key for bank account number encryption from a file.
- *
- * @return
- *   The encryption key or FALSE if it can't be found.
- */
-function uc_echeck_encryption_key() {
-  static $key;
-
-  if (!empty($key)) {
-    return $key;
-  }
-
-  $dir = variable_get('uc_echeck_encryption_path', t('Not configured, see below.'));
-
-  if (!empty($dir) && $dir !== t('Not configured, see below.')) {
-    $filename = rtrim($dir, '/\\') .'/uc_echeck.key';
-
-    if (file_exists($filename)) {
-      if (!$file = fopen($filename, 'r')) {
-        return FALSE;
       }
+      break;
 
-      $key = fread($file, filesize($filename));
-      fclose($file);
-    }
-  }
-  else {
-    return FALSE;
-  }
-
-  return $key;
-}
-
-// Save the eCheck data for an order.
-function uc_echeck_save_echeck($order) {
-  // Build the data array for the record in the database.
-  $data = $order->payment_details;
-  $data['order_id'] = $order->order_id;
-
-  if (empty($data['echeck_bank_acct_num_last4'])) {
-    $data['echeck_bank_acct_num_last4'] = substr($data['echeck_bank_acct_num'], -4);
-  }
-
-  // Encrypt the routing and account numbers.
-  $key = uc_echeck_encryption_key();
-  $crypt = new uc_encryption_class;
-
-  $data['echeck_bank_aba_code'] = $crypt->encrypt($key, base64_encode($data['echeck_bank_aba_code'] . md5(time())));
-  $data['echeck_bank_acct_num'] = $crypt->encrypt($key, base64_encode($data['echeck_bank_acct_num'] . md5(time())));
-
-  // Log any errors to the watchdog.
-  uc_store_encryption_errors($crypt, 'uc_echeck');
-
-  // Check for an existing record.
-  $echeck_id = db_result(db_query("SELECT echeck_id FROM {uc_payment_echeck} WHERE order_id = %d", $order->order_id));
-
-  if ($echeck_id) {
-    $data['echeck_id'] = $echeck_id;
-    $key = 'echeck_id';
-  }
-  else {
-    $key = NULL;
-  }
-
-  drupal_write_record('uc_payment_echeck', $data, $key);
-}
-
-// Load the eCheck data for an order.
-function uc_echeck_load_echeck($order) {
-  $result = db_query("SELECT * FROM {uc_payment_echeck} WHERE order_id = %d", $order->order_id);
-
-  if ($data = db_fetch_array($result)) {
-    // Decrypt the routing and account numbers.
-    $key = uc_echeck_encryption_key();
-    $crypt = new uc_encryption_class;
-
-    $data['echeck_bank_aba_code'] = base64_decode($crypt->decrypt($key, $data['echeck_bank_aba_code']));
-    $data['echeck_bank_aba_code'] = substr($data['echeck_bank_aba_code'], 0, strlen($data['echeck_bank_aba_code']) - 32);
-    $data['echeck_bank_acct_num'] = base64_decode($crypt->decrypt($key, $data['echeck_bank_acct_num']));
-    $data['echeck_bank_acct_num'] = substr($data['echeck_bank_acct_num'], 0, strlen($data['echeck_bank_acct_num']) - 32);
-
-    // Log any errors to the watchdog.
-    uc_store_encryption_errors($crypt, 'uc_echeck');
-
-    return $data;
-  }
-  else {
-    return array();
-  }
-}
-
-// Wipe the routing and account numbers from the database for a given order.
-function uc_echeck_wipe_numbers($order_id) {
-  db_query("UPDATE {uc_payment_echeck} SET echeck_bank_aba_code = '', echeck_bank_acct_num = '' WHERE order_id = %d", $order_id);
-}
-
-// Return the name of an account type or the entire array of options.
-function uc_echeck_acct_type($option = NULL) {
-  $types = array(
-    'CHECKING' => t('Checking'),
-    'BUSINESSCHECKING' => t('Business checking'),
-    'SAVINGS' => t('Savings'),
-  );
-
-  if (!empty($option) && !empty($types[$option])) {
-    return $types[$option];
-  }
-
-  return $types;
-}
-
-// Makes sure the encryption key directory in the eCheck settings is valid.
-function uc_echeck_settings_form_validate($form, &$form_state) {
-  $dir = variable_get('uc_echeck_encryption_path', t('Not configured, see below.'));
-  $filename = rtrim($dir, '/\\') .'/uc_echeck.key';
-
-  if ($form_state['values']['uc_echeck_encryption_path'] !== variable_get('uc_echeck_encryption_path', t('Not configured, see below.'))) {
-    $dir = rtrim($form_state['values']['uc_echeck_encryption_path'], '/\\');
-
-    $_SESSION['update_echeck_encrypt_dir'] = TRUE;
-    if (!empty($dir) && $dir !== t('Not configured, see below.')) {
-      if (!is_dir($dir)) {
-        form_set_error('uc_echeck_encryption_path', t('You have specified a non-existent directory.'));
-        unset($_SESSION['update_echeck_encrypt_dir']);
-      }
-      else {
-        $file = fopen($dir .'/encrypt.test', 'w');
-        if ($file === FALSE) {
-          form_set_error('uc_echeck_encryption_path', t('Cannot write to directory, please verify the directory permissions.'));
-          unset($_SESSION['update_echeck_encrypt_dir']);
-        }
-        else {
-          if (fwrite($file, '0123456789') === FALSE) {
-            form_set_error('uc_echeck_encryption_path', t('Cannot write to directory, please verify the directory permissions.'));
-            unset($_SESSION['update_echeck_encrypt_dir']);
-            fclose($file);
+    case 'save':
+      if ($arg1->payment_method == 'echeck') {
+        // Build an array of eCheck data to store with the order.
+        if (!empty($arg1->payment_details)) {
+          // Check for debug mode.
+          if (variable_get('uc_echeck_debug', FALSE) && arg(1) != 'checkout') {
+            // If enabled, store the full payment details.
+            $echeck_data = $arg1->payment_details;
           }
           else {
-            fclose($file);
-            $file = fopen($dir .'/encrypt.test', 'r');
-            if ($file === FALSE) {
-              form_set_error('uc_echeck_encryption_path', t('Cannot read from directory, please verify the directory permissions.'));
-              unset($_SESSION['update_echeck_encrypt_dir']);
-            }
-            fclose($file);
+            // Save only some limited, PCI compliant data.
+            $echeck_data = $arg1->payment_details;
+            $echeck_data['echeck_bank_acct_num'] = substr($echeck_data['echeck_bank_acct_num'], -4);
           }
-          unlink($dir .'/encrypt.test');
+
+          _save_echeck_data_to_order($echeck_data, $arg1->order_id);
         }
       }
-    }
+      break;
+
+    case 'load':
+      if ($arg1->payment_method == 'echeck') {
+        // Load the eCheck details from the echeck cache if available.
+        $arg1->payment_details = uc_echeck_cache('load');
+
+        // Otherwise load any details that might be stored in the data array.
+        if (empty($arg1->payment_details) && isset($arg1->data['echeck_data'])) {
+          $arg1->payment_details = uc_echeck_cache('save', $arg1->data['echeck_data']);
+        }
+      }
+      break;
   }
 }
 
-// Creates the encryption key file if it doesn't already exist.
-function uc_echeck_settings_form_submit($form, &$form_state) {
-  if ($_SESSION['update_echeck_encrypt_dir'] === TRUE) {
-    $dir = rtrim($form_state['values']['uc_echeck_encryption_path'], '/\\');
+/**
+ * Implementation of hook_payment_method().
+ */
+function uc_echeck_payment_method() {
 
-    if (!empty($dir) && $dir !== t('Not configured, see below.')) {
-      if (!file_exists($dir .'/uc_echeck.key')) {
-        if (!$file = fopen($dir .'/uc_echeck.key', 'wb')) {
-          $message = t('eCheck encryption key file creation failed. Check your filepath settings and directory permissions.');
-          drupal_set_message($message, 'error');
-          watchdog('uc_echeck', $message, WATCHDOG_ERROR);
+  // Do not show the eCheck payment method if encryption is not configured.
+  if (arg(0) == 'cart' && uc_credit_encryption_key() === FALSE) {
+    return;
+  }
+
+  $methods[] = array(
+    'id' => 'echeck',
+    'name' => t('eCheck'),
+    'title' => t('eCheck'),
+    'desc' => t('Pay by eCheck using your bank account information.'),
+    'callback' => 'uc_payment_method_echeck',
+    'weight' => 1,
+    'checkout' => TRUE,
+  );
+
+  return $methods;
+}
+
+
+/*******************************************************************************
+ * Callback Functions, Forms, and Tables
+ ******************************************************************************/
+
+/**
+ * Callback function for the eCheck payment method.
+ */
+
+function uc_payment_method_echeck($op, &$arg1, $silent = FALSE) {
+  dpm($op, "uc_payment_method_echeck");
+  switch ($op) {
+    case 'cart-details':
+      $details = drupal_get_form('uc_payment_method_echeck_form', $arg1);
+      return uc_strip_form($details);
+
+    case 'cart-process':
+      // Fetch the eCheck details from the $_POST directly.
+      $echeck_data = array(
+        'echeck_bank_name' => check_plain(isset($_POST['echeck_bank_name']) ? $_POST['echeck_bank_name'] : ''),
+        'echeck_bank_aba_code' => check_plain(str_replace(' ', '',  $_POST['echeck_bank_aba_code'])),
+        'echeck_bank_acct_num' => check_plain(str_replace(' ', '', $_POST['echeck_bank_acct_num'])),
+        'echeck_bank_acct_name' => check_plain(isset($_POST['echeck_bank_acct_name']) ? $_POST['echeck_bank_acct_name'] : ''),
+        'echeck_bank_acct_type' => check_plain(isset($_POST['echeck_bank_acct_type']) ? $_POST['echeck_bank_acct_type'] : ''),
+      );
+      
+      // Recover cached eCheck data in $_POST if it exists.
+      if (isset($_POST['payment_details_data'])) {
+        $cache = uc_echeck_cache('save', $_POST['payment_details_data']);
+      }
+
+      // Account for partial eCheck numbers when masked by the system.
+      if (substr($echeck_data['echeck_bank_acct_num'], 0, strlen(t('(Last4)'))) == t('(Last4)')) {
+        // Recover the number from the encrypted data in $_POST if truncated.
+        if (isset($cache['echeck_bank_acct_num'])) {
+          $echeck_data['echeck_bank_acct_num'] = $cache['echeck_bank_acct_num'];
         }
         else {
-          // Replacement key generation suggested by Barry Jaspan for increased security.
-          fwrite($file, md5(drupal_get_token(serialize($_REQUEST) . serialize($_SERVER) . time())));
-          fclose($file);
-
-          drupal_set_message(t('eCheck encryption key file generated. eCheck data will now be encrypted.'));
-          watchdog('uc_echeck', 'eCheck encryption key file generated.');
+          $echeck_data['echeck_bank_acct_num'] = '';
         }
       }
-    }
+
+      // Go ahead and put the eCheck data in the payment details array.
+      $arg1->payment_details = $echeck_data;
+
+      // Default our value for validation.
+      $return = TRUE;
+
+      // Make sure a bank name was entered.
+      if (empty($echeck_data['echeck_bank_name'])) {
+        if (!$silent) {
+          drupal_set_message(t('You must enter the name of your bank.'), 'error');
+        }
+        $return = FALSE;
+      }
+
+      // Validate the bank routing number.
+      if (empty($echeck_data['echeck_bank_aba_code']) || !_validate_echeck_aba($echeck_data['echeck_bank_aba_code'])) {
+        if (!$silent) {
+          drupal_set_message(t('You must enter a valid bank routing number.'), 'error');
+        }
+        $return = FALSE;
+      }
+
+      // Validate the bank account number.
+      if (empty($echeck_data['echeck_bank_acct_num']) || !ctype_digit($echeck_data['echeck_bank_acct_num'])) {
+        if (!$silent) {
+          drupal_set_message(t('You must enter a valid bank account number.'), 'error');
+        }
+        $return = FALSE;
+      }
+
+      // Make sure an account name was entered.
+      if (empty($echeck_data['echeck_bank_acct_name'])) {
+        if (!$silent) {
+          drupal_set_message(t('You must enter the name associated with your bank account.'), 'error');
+        }
+        $return = FALSE;
+      }
+
+      // Initialize the encryption key and class.
+      $key = uc_credit_encryption_key();
+      $crypt = new uc_encryption_class();
+
+      // Store the encrypted details in the session for the next pageload.
+      // We are using base64_encode() because the encrypt function works with a
+      // limited set of characters, not supporting the full Unicode character
+      // set or even extended ASCII characters that may be present.
+      // base64_encode() converts everything to a subset of ASCII, ensuring that
+      // the encryption algorithm does not mangle names.
+      $_SESSION['seschk'] = $crypt->encrypt($key, base64_encode(serialize($arg1->payment_details)));
+
+      // Log any errors to the watchdog.
+      uc_store_encryption_errors($crypt, 'uc_echeck');
+
+      // If we're going to the review screen, set a variable that lets us know
+      // we're paying by eCheck.
+      if ($return) {
+        $_SESSION['echeck_pay'] = TRUE;
+      }
+
+      return $return;
+
+    case 'cart-review':
+      $review = array();
+
+      $review[] = array('title' => t('Bank'), 'data' => check_plain($arg1->payment_details['echeck_bank_name']));
+      $review[] = array('title' => t('Routing number'), 'data' => check_plain($arg1->payment_details['echeck_bank_aba_code']));
+      $review[] = array('title' => t('Account Number'), 'data' => uc_echeck_display_number($arg1->payment_details['echeck_bank_acct_num']));
+      $review[] = array('title' => t('Account name'), 'data' => check_plain($arg1->payment_details['echeck_bank_acct_name']));
+      $review[] = array('title' => t('Account type'), 'data' => uc_echeck_acct_type($arg1->payment_details['echeck_bank_acct_type']));
+
+      return $review;
+
+    case 'order-view':
+      $output = '';
+
+      // Add the hidden span for the CC details if possible.
+      if (user_access('view echeck details')) {
+        drupal_add_js(drupal_get_path('module', 'uc_credit') .'/uc_credit.js');
+
+        $output .= '<span onclick="toggle_card_details();" style="cursor: pointer;">'
+                  .'<a id="cc_details_title" href="" onclick="return false;" style="display: none;">'. t('View account details.') .'</a>';
+
+        $output .= '<span id="cc_details"><table style="width: auto;">';
+
+        $output .= '<tr><td>'. t('Account Number:') .' </td><td>'. uc_echeck_display_number($arg1->payment_details['echeck_bank_acct_num']) .'</td></tr>';
+
+        if (variable_get('uc_echeck_debug', FALSE)) {
+        }
+
+        $output .= '</table></span></span>';
+
+        // Add the form to process the card if applicable.
+        if (user_access('process echecks')) {
+          $output .= drupal_get_form('uc_echeck_order_view_form', $arg1->order_id);
+        }
+      }
+
+      return $output;
+
+    case 'customer-view':
+      $output = t('Account Number:') .'<br />'
+              . uc_echeck_display_number($arg1->payment_details['echeck_bank_acct_num'], TRUE);
+      return $output;
+
+      // $lines = array(
+      //   t('Bank name') .': '. check_plain($arg1->payment_details['echeck_bank_name']),
+      //   t('Account #') .': '. uc_echeck_display_number($arg1->payment_details['echeck_bank_acct_num']),
+      // );
+      // 
+      // return implode('<br />', $lines);
+
+    case 'order-details':
+      if (variable_get('uc_echeck_debug', FALSE)) {
+        $details = drupal_get_form('uc_payment_method_echeck_form', $arg1);
+        return uc_strip_form($details);
+      }
+      else {
+        return t('Use the terminal available through the<br />%button button on the View tab to<br />process echeck payments.', array('%button' => t('Process eCheck')));
+      }
+
+    case 'edit-process':
+      $cache = uc_echeck_cache('load');
+
+      $changes['payment_details']['echeck_bank_acct_type'] = check_plain($_POST['echeck_bank_acct_type']);
+      $changes['payment_details']['echeck_bank_acct_name'] = check_plain($_POST['echeck_bank_acct_name']);
+      if (strpos($_POST['echeck_bank_acct_num'], t('(Last 4) ')) !== 0) {
+        $changes['payment_details']['echeck_bank_acct_num'] = check_plain($_POST['echeck_bank_acct_num']);
+      }
+      else {
+        $changes['payment_details']['echeck_bank_acct_num'] = $cache['echeck_bank_acct_num'];
+      }
+      $changes['payment_details']['echeck_bank_name'] = check_plain($_POST['echeck_bank_name']);
+      return $changes;
+
+    case 'settings':
+      module_load_include('inc', 'uc_echeck', 'uc_echeck.admin');
+      return uc_echeck_settings_form();
   }
 }
 
+/**
+ * Form to gather the required fields to process an eCheck payment.
+ *
+ * @return
+ *  The eCheck payment form.
+ */
 
-// Allow administrators to process manual eCheck payments.
-function uc_echeck_terminal_form($form_state, $order) {
-  $form = array();
+function uc_payment_method_echeck_form($form_state, $order) {
 
-  $form['order'] = array(
-    '#type' => 'value',
-    '#value' => $order,
-  );
-
-  $balance = uc_payment_balance($order);
-
-  $form['amount'] = array(
-    '#type' => 'textfield',
-    '#title' => t('Payment amount'),
-    '#description' => t('Order balance: @balance', array('@balance' => uc_currency_format($balance))),
-    '#default_value' => $balance > 0 ? uc_currency_format($balance, FALSE, FALSE) : 0,
-    '#field_prefix' => variable_get('uc_sign_after_amount', FALSE) ? '' : variable_get('uc_currency_sign', '$'),
-    '#field_suffix' => variable_get('uc_sign_after_amount', FALSE) ? variable_get('uc_currency_sign', '$') : '',
-    '#required' => TRUE,
-    '#size' => 12,
-  );
-
-  $form['payment'] = array(
-    '#type' => 'fieldset',
-    '#title' => t('Payment details'),
-    '#tree' => TRUE,
-  );
-
-  $form['payment'] += uc_echeck_payment_form($form_state, $order);
-
-  // If the eCheck data was temporarily saved to the order, clear it now.
-  if ($_SESSION['echeck_clear']) {
-    // Wipe the routing and account numbers from the order.
-    uc_echeck_wipe_numbers($order->order_id);
-
-    unset($_SESSION['echeck_clear']);
+  // $echeck_cache = uc_echeck_cache('load');
+  //  && empty($echeck_cache)
+  // Normally the eCheck data is posted in via AJAX.
+  if (!empty($_POST['payment-details-data']) && arg(0) == 'cart') {
+    $order->payment_details = uc_echeck_cache('save', $_POST['payment-details-data']);
   }
 
-  $form['submit'] = array(
-    '#type' => 'submit',
-    '#value' => t('Process payment'),
-    '#suffix' => l(t('Cancel'), 'admin/store/orders/'. $order->order_id),
+  // But we have to accommodate failed checkout form validation here.
+  if (isset($_SESSION['seschk'])) {
+    $order->payment_details = uc_echeck_cache('save', $_SESSION['seschk']);
+    unset($_SESSION['seschk']);
+  }
+
+  if (arg(1) == 'checkout') {
+    $form['echeck_policy'] = array('#value' => variable_get('uc_echeck_policy', t('By selecting eCheck, you hereby authorize a direct withdrawal from the bank account indicated below.')));
+  }
+
+  $form['echeck_bank_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Bank name'),
+    '#default_value' => $order->payment_details['echeck_bank_name'],
+    '#attributes' => array('autocomplete' => 'off'),
+    '#required' => TRUE,
+    '#maxlength' => 50,
+    '#size' => 32,
   );
+  
+  $form['echeck_bank_aba_code'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Bank routing number'),
+    '#description' => t('The first 9 digit number along the bottom of your checks.'),
+    '#default_value' => $order->payment_details['echeck_bank_aba_code'],
+    '#attributes' => array('autocomplete' => 'off'),
+    '#required' => TRUE,
+    '#maxlength' => 9,
+    '#size' => 32,
+  );
+
+  // Set up the default account number on the eCheck form.
+  if ((strlen($order->payment_details['echeck_bank_acct_num']) > 4)) {
+    // Display the number as is if it does not validate so it can be corrected.
+    $default_num = $order->payment_details['echeck_bank_acct_num'];
+  }
+  elseif (!empty($order->payment_details['echeck_bank_acct_num'])) {
+    if (user_access('view echeck numbers') && strlen($order->payment_details['echeck_bank_acct_num']) > 4) {
+      // Display the full number to those with access.
+      $default_num = $order->payment_details['echeck_bank_acct_num'];
+    }
+    else {
+      // Otherwise default to the last 4 digits.
+      $default_num = t('(Last 4) ') . substr($order->payment_details['echeck_bank_acct_num'], -4);
+    }
+  }
+  
+  $form['echeck_bank_acct_num'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Bank account number'),
+    '#description' => t('Up to a 20 digit number next to the the routing number.'),
+    '#default_value' => $_SESSION['clear_echeck'] ? '' : $default_num,
+    '#attributes' => array('autocomplete' => 'off'),
+    '#required' => TRUE,
+    '#maxlength' => 20,
+    '#size' => 32,
+  );
+  
+  $form['echeck_bank_acct_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Name on the account'),
+    '#default_value' => $order->payment_details['echeck_bank_acct_name'],
+    '#attributes' => array('autocomplete' => 'off'),
+    '#required' => TRUE,
+    '#maxlength' => 50,
+    '#size' => 32,
+  );
+  
+  $form['echeck_bank_acct_type'] = array(
+    '#type' => 'select',
+    '#title' => t('Bank account type'),
+    '#options' => uc_echeck_acct_type(),
+    '#default_value' => !empty($order->payment_details['echeck_bank_acct_type']) ? $order->payment_details['echeck_bank_acct_type'] : 'CHECKING',
+    '#required' => TRUE,
+  );
+
+  unset($_SESSION['clear_echeck']);
 
   return $form;
 }
 
-function uc_echeck_terminal_form_validate($form, &$form_state) {
-  if (!is_numeric($form_state['values']['amount']) || $form_state['values']['amount'] <= 0) {
-    form_set_error('amount', t('You must enter a positive number for the payment amount.'));
-  }
+/**
+ * Builds the "Process eCheck" button on the order view.
+ */
+function uc_echeck_order_view_form($form_state, $order_id) {
+  $form['order_id'] = array(
+    '#type' => 'hidden',
+    '#value' => $order_id,
+  );
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Process eCheck'),
+  );
+  return $form;
 }
 
-function uc_echeck_terminal_form_submit($form, &$form_state) {
-  $order = $form_state['values']['order'];
-  $order->payment_details = $form_state['values']['payment'];
 
-  // Process the eCheck payment.
-  $result = uc_echeck_process($order, $form_state['values']['amount']);
-
-  // If the payment failed, halt the checkout process.
-  if ($result !== TRUE) {
-    drupal_set_message($result, 'error');
-
-    uc_order_save($order);
-
-    $_SESSION['echeck_clear'] = TRUE;
-  }
-  else {
-    // Otherwise empty out the routing and account numbers.
-    uc_echeck_wipe_numbers($order->order_id);
-
-    // Update the last 4 digits of the account stored in the database.
-    db_query("UPDATE {uc_payment_echeck} SET echeck_bank_acct_num_last4 = '%s' WHERE order_id = %d", substr($order->payment_details['echeck_bank_acct_num'], -4), $order->order_id);
-
-    drupal_set_message(t('eCheck payment processed successfully!'));
-
-    $form_state['redirect'] = 'admin/store/orders/'. $order->order_id;
-  }
+/**
+ * Submit handler for order view form.
+ */
+function uc_echeck_order_view_form_submit($form, &$form_state) {
+  $form_state['redirect'] = 'admin/store/orders/'. $form_state['values']['order_id'] .'/echeck';
 }
 
+/*******************************************************************************
+ * Module and Helper Functions
+ ******************************************************************************/
 
 /**
  * Retrieves the ID of the default echeck gateway (taken directly form uc_credit)
@@ -534,13 +724,164 @@ function uc_echeck_default_gateway() {
   return $gateway_id;
 }
 
+// Return the name of an account type or the entire array of options.
+function uc_echeck_acct_type($option = NULL) {
+  $types = array(
+    'CHECKING' => t('Checking'),
+    'BUSINESSCHECKING' => t('Business checking'),
+    'SAVINGS' => t('Savings'),
+  );
+
+  if (!empty($option) && !empty($types[$option])) {
+    return $types[$option];
+  }
+
+  return $types;
+}
+
+/**
+ * Loads the key for bank account number encryption from a file.
+ *
+ * @return
+ *   The encryption key or FALSE if it can't be found.
+ */
+function uc_echeck_encryption_key() {
+  static $key;
+
+  if (!empty($key)) {
+    return $key;
+  }
+
+  $key_dir = variable_get('uc_echeck_encryption_path', '');
+  if (is_dir($key_dir)) {
+    $key_file = $key_dir . '/' . UC_ECHECK_KEYFILE_NAME;
+    if (file_exists($key_file)) {
+      if (!$file = @fopen($key_file, 'r')) {
+        return FALSE;
+      }
+
+      $key = fread($file, filesize($key_file));
+      fclose($file);
+    }
+  }
+  else {
+    return FALSE;
+  }
+
+  return $key;
+}
+
+/**
+ * Returns a eCheck number with appropriate masking.
+ */
+function uc_echeck_display_number($number, $masked = FALSE) {
+  if (strlen($number) == 4) {
+    return t('(Last 4) ') . $number;
+  }
+
+  if (user_access('view echeck numbers') && !$masked) {
+    return $number;
+  }
+  else {
+    return str_repeat('-', 12) . substr($number, -4);
+  }
+}
+
+/**
+ * Caches eCheck details on a pageload for use in various functions.
+ *
+ * @param $op
+ *   The cache operation to perform; either 'save', 'load', or 'clear'.
+ * @param $data
+ *   The encrypted, serialized string containing the eCheck data.
+ * @return
+ *   An array of credit card details.
+ */
+function uc_echeck_cache($op, $data = NULL, $encrypted = TRUE) {
+
+  // The eCheck data will be stored in this static variable.
+  static $echeck_cache = array();
+
+  if ($op == 'save') {
+    if ($encrypted) {
+      // Initialize the encryption key and class.
+      $key = uc_echeck_encryption_key();
+      $crypt = new uc_encryption_class();
+
+      // Save the unencrypted eCheck details for the duration of this request.
+      // In recent versions, we base64_encode() the payment details before
+      // encrypting. We can detect encoded data by the lack of colons,
+      // due to base64's limited character set.
+      $data = $crypt->decrypt($key, $data);
+      if (strpos($data, ':') === FALSE) {
+        $data = base64_decode($data);
+      }
+      $echeck_cache = unserialize($data);
+    }
+    else {
+      $echeck_cache = $data;
+    }
+  }
+  elseif ($op == 'clear') {
+    $echeck_cache = array();
+  }
+
+  return $echeck_cache;
+}
+
+/**
+ * Caches the encrypted eCheck data on the review order form for processing.
+ */
+function uc_echeck_cart_review_back_submit($form, &$form_state) {
+  $session_echeck_data = base64_decode($_POST['seschk']);
+
+  $_SESSION['seschk'] = $session_echeck_data;
+  uc_credit_cache('save', $session_echeck_data);
+}
+
+/**
+ * Caches the encrypted eCheck data on the review order form for processing.
+ */
+function uc_echeck_cart_review_pre_form_submit($form, &$form_state) {
+  $session_card_data = base64_decode($_POST['seschk']);
+
+  $_SESSION['seschk'] = $session_card_data;
+  uc_credit_cache('save', $session_card_data);
+}
+
+/**
+ * Clears the temporary CC data if the review order form submits.
+ */
+function uc_echeck_cart_review_post_form_submit($form, &$form_state) {
+  if ($_SESSION['do_complete']) {
+    // Otherwise stuff it back in the session for the next pageload.
+    unset($_SESSION['seschk']);
+  }
+}
+
+/**
+ * Saves a CC data array to an order's data array.
+ */
+function _save_echeck_data_to_order($echeck_data, $order_id) {
+  $crypt = new uc_encryption_class();
+
+  // Load up the existing data array.
+  $data = db_result(db_query("SELECT data FROM {uc_orders} WHERE order_id = %d", $order_id));
+  $data = unserialize($data);
+
+  // Stuff the serialized and encrypted CC details into the array.
+  $data['echeck_data'] = $crypt->encrypt(uc_echeck_encryption_key(), base64_encode(serialize($echeck_data)));
+  uc_store_encryption_errors($crypt, 'uc_echeck');
+
+  // Save it again.
+  db_query("UPDATE {uc_orders} SET data = '%s' WHERE order_id = %d", serialize($data), $order_id);
+}
+
 /**
 * http://www.zend.com//code/codex.php?ozid=968&single=1
-*
 */
 
-function _validate_echeck_aba($number)
-{
+function _validate_echeck_aba($number) {
   // First, check for 9 digits and non-numeric characters.
   if (ereg("^[0-9]{9}$",$number))
   {
@@ -569,4 +910,34 @@ function _validate_echeck_aba($number)
   {
     return(false);
   }
+}
+
+/**
+ * Title callback for admin/store/orders/%uc_order/credit.
+ */
+function uc_echeck_terminal_title($order) {
+  return t('eCheck terminal: Order @order_id', array('@order_id' => $order->order_id));
+}
+
+/**
+ * Returns the credit transaction types available for a payment gateway.
+ */
+function uc_echeck_gateway_txn_types($gateway) {
+  $types = array();
+
+  // Get the transaction types associated with this gateway.
+  $types = _payment_gateway_data($gateway, 'echeck_txn_types');
+
+  // Default to authorization plus capture if none are specified.
+  if (empty($types)) {
+    if (!is_null(_payment_gateway_data($gateway, 'echeck'))) {
+      $types = array(UC_ECHECK_AUTH_CAPTURE);
+    }
+    else {
+      // Or an empty array if the gateway doesn't even handle credit payments.
+      $types = array();
+    }
+  }
+
+  return $types;
 }

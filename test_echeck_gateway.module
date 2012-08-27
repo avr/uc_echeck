@@ -1,0 +1,86 @@
+<?php
+
+/**
+ * @file
+ * A dummy payment gateway to use for testing or as an example.
+ *
+ * All payments using this test gateway will succeed, except when:
+ * - Bank Account ABA equals '000000000'. (Note that ANY ABA number
+ *   that fails the check performed by uc_echeck will not even be
+ *   submitted to this gateway).
+ * - Payment amount equals 12.34 in store currency units.
+ * - Customer's billing first name equals 'Fictitious'.
+ * - Customer's billing telephone number equals '8675309'.
+ */
+
+/*******************************************************************************
+ * Hook Functions (Ubercart)
+ ******************************************************************************/
+
+/**
+ * Implements hook_payment_gateway().
+ *
+ * @see test_echeck_gateway.module
+ * @see test_echeck_gateway_charge()
+ */
+function test_echeck_gateway_payment_gateway() {
+  $gateways[] = array(
+    'id' => 'test_echeck_gateway',
+    'title' => t('Test eCheck Gateway'),
+    'description' => t('Process eCheck payments through the Test Gateway.'),
+    'echeck' => 'test_echeck_gateway_charge',
+  );
+
+  return $gateways;
+}
+
+/*******************************************************************************
+ * Module and Helper Functions
+ ******************************************************************************/
+
+/**
+ * Callback function to perform the charge operation.
+ *
+ * @see test_gateway.module
+ * @see test_gateway_payment_gateway()
+ */
+function test_echeck_gateway_charge($order_id, $amount, $data) {
+  global $user;
+  $order = uc_order_load($order_id);
+
+  // Conditions for failure are described in file documentation block above.
+  // All other transactions will succeed.
+  if ($order->payment_details['echeck_bank_aba_code'] == '000000000' ||
+      $amount == 12.34                                           ||
+      $order->billing_first_name == 'Fictitious'                 ||
+      $order->billing_phone == '8675309'                            ) {
+  }
+  else {
+    $success = TRUE;
+  }
+
+  // Uncomment this line to see the order object.  The information for the
+  // payment is in the $order->payment_details array.
+  // drupal_set_message('<pre>' . print_r($order->payment_details, TRUE) . '</pre>');
+
+  if ($success) {
+    $message = t('Bank account charged: !amount', array('!amount' => uc_currency_format($amount)));
+    uc_order_comment_save($order_id, $user->uid, $message, 'admin');
+  }
+  else {
+    $message = t('Bank account charge failed.');
+    uc_order_comment_save($order_id, $user->uid, $message, 'admin');
+  }
+
+  $result = array(
+    'success' => $success,
+    'comment' => t('Bank account charged, resolution code: 0022548315'),
+    'message' => $success ?
+                 t('Bank account payment processed successfully.') :
+                 t('Bank account charge failed.'),
+    'uid' => $user->uid,
+    // 'data' => $data,
+  );
+
+  return $result;
+}
